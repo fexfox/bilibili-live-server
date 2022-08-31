@@ -1,3 +1,5 @@
+using CreativeVeinStudio.Simple_Pool_Manager;
+using CreativeVeinStudio.Simple_Pool_Manager.Interfaces;
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
@@ -22,10 +24,19 @@ public class DanmuManager : MonoBehaviour
     public Color G3;
     [InspectorShow("д╛хо")]
     public Color Normal;
+    RectTransform self_rt;
+    private IPoolActions _spManager;
     // Start is called before the first frame update
+    Transform p_parent;
+    private void Awake()
+    {
+        _spManager = FindObjectOfType<SpManager>();
+        self_rt = GetComponent<RectTransform>();
+        p_parent = _spManager.GetPoolItemParentTransform("Danmu");
+    }
     void Start()
     {
-
+       
     }
     public void HideAvatar()
     {
@@ -53,11 +64,10 @@ public class DanmuManager : MonoBehaviour
     }
     // Update is called once per frame
     void Update()
-    {
-
-    }
-    public void DestoryMe()
-    {
-        Destroy(gameObject);
+    {if(gameObject.activeSelf)
+        if (self_rt.anchoredPosition.y >= -200f&&transform.parent?.name!="Danmu") {
+            gameObject.transform.SetParent(p_parent);
+            _spManager.DisablePoolObject(gameObject);
+        }
     }
 }

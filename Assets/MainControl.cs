@@ -1,9 +1,8 @@
+using CreativeVeinStudio.Simple_Pool_Manager;
+using CreativeVeinStudio.Simple_Pool_Manager.Interfaces;
 using Liluo.BiliBiliLive;
-using System.Collections;
-using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
-using UnityEngine.UI;
 
 public class MainControl : MonoBehaviour
 {
@@ -12,6 +11,11 @@ public class MainControl : MonoBehaviour
     public TMP_Text RoomViewer;
     public TMP_InputField RoomID;
     public bool showAvatar;
+    private IPoolActions _spManager;
+    private void Awake()
+    {
+        _spManager = FindObjectOfType<SpManager>();
+    }
     // Start is called before the first frame update
     void Start()
     {
@@ -34,7 +38,10 @@ public class MainControl : MonoBehaviour
 
     private async void Req_OnDanmuCallBack(BiliBiliLiveDanmuData obj)
     {
-        var danmu = Instantiate(DanmuPrefab);
+            
+        var danmu = _spManager.GetRandomPoolItem("Danmu",false);
+        if (!danmu) return;
+        danmu.transform.SetParent(Container);
         var data = danmu.GetComponent<DanmuManager>();
         if (showAvatar)
         { data.avatar.sprite = await BiliBiliLive.GetHeadSprite(obj.userId); }
@@ -45,7 +52,7 @@ public class MainControl : MonoBehaviour
         data.username.text = obj.username;
         data.content.text = obj.content;
         data.setGuardLevel(obj.guardLevel);
-        danmu.transform.SetParent(Container);
+        danmu.SetActive(true);
         Debug.Log($"{ obj.userId},{obj.username},{obj.vip},{obj.guardLevel},{obj.content}");
     }
 
@@ -64,6 +71,5 @@ public class MainControl : MonoBehaviour
         req?.DisConnect();
         req = null;
         RoomViewer.text = "δ֪";
-        BroadcastMessage("DestroyMe");
     }
 }
