@@ -16,11 +16,13 @@ namespace Liluo.BiliBiliLive
         /// 断开连接
         /// </summary>
         void DisConnect();
-
+        event Action<string> OnWarning;
+        event Action<int> OnUserCountChange;
+        event Action<int> OnLiveStateChange;
         /// <summary>
         /// 房间人数改变时触发回调
         /// </summary>
-        event Action<int> OnRoomViewer;
+        event Action<int> OnWatchCountChange;
 
         /// <summary>
         /// 监听弹幕回调函数
@@ -41,5 +43,8 @@ namespace Liluo.BiliBiliLive
         /// 监听SC回调函数
         /// </summary>
         event Action<BiliBiliLiveSuperChatData> OnSuperChatCallBack;
+
+        event Action<BiliBiliLiveWelcomeData> OnWelcomeCallBack;
+        event Action<BiliBiliLiveInteractData> OnInteractCallBack;
     }
 }

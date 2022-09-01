@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using BitConverter;
 using Newtonsoft.Json;
@@ -16,7 +19,7 @@ namespace Liluo.BiliBiliLive
         /// <summary>
         /// 弹幕聊天的服务器地址
         /// </summary>
-        string chatPath = "chat.bilibili.com";
+        string chatHost = "broadcastlv.chat.bilibili.com";
         /// <summary>
         /// Tcp 客户端 socket
         /// </summary>
@@ -33,7 +36,7 @@ namespace Liluo.BiliBiliLive
         /// <summary>
         /// 默认主机的这两个服务器
         /// </summary>
-        string[] defaultPaths = new string[] { "livecmt-2.bilibili.com", "livecmt-1.bilibili.com" };
+        string[] defaultHosts = new string[] { "tx-gz-live-comet-02.chat.bilibili.com", "tx-bj-live-comet-02.chat.bilibili.com", "broadcastlv.chat.bilibili.com" };
         /// <summary>
         /// Http 对象
         /// </summary>
@@ -41,22 +44,32 @@ namespace Liluo.BiliBiliLive
         /// <summary>
         /// 获取 房间ID 的地址
         /// </summary>
-        string CIDInfoUrl = "https://api.live.bilibili.com/room/v1/Danmu/getConf?room_id=";
+        string CIDInfoUrl = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?id=";
         /// <summary>
         /// 协议转换
         /// </summary>
-        short protocolversion = 2;
+        short protocolversion = 1;
         /// <summary>
         /// 端口号
         /// </summary>
         int chatPort = 2243;
-
-        public event Action<int> OnRoomViewer;
+        int defaultPort = 2243;
+        private static List<Tuple<string, int>> ChatHostList = new List<Tuple<string, int>>();
+        public event Action<string> OnWarning;
+        public event Action<int> OnUserCountChange;
+        public event Action<int> OnWatchCountChange;
+        public event Action<int> OnLiveStateChange;
         public event Action<BiliBiliLiveDanmuData> OnDanmuCallBack;
         public event Action<BiliBiliLiveGiftData> OnGiftCallBack;
         public event Action<BiliBiliLiveGuardData> OnGuardCallBack;
         public event Action<BiliBiliLiveSuperChatData> OnSuperChatCallBack;
+        public event Action<BiliBiliLiveWelcomeData> OnWelcomeCallBack;
+        public event Action<BiliBiliLiveInteractData> OnInteractCallBack;
 
+        private string lastserver;
+        private static int lastroomid;
+        private static string token = "";
+        private CancellationTokenSource cancellationTokenSource;
         /// <summary>
         /// 申请异步连接  需要输入对应房间号
         /// </summary>
@@ -64,62 +77,111 @@ namespace Liluo.BiliBiliLive
         /// <returns></returns>
         public async Task<bool> Connect(int roomID)
         {
+            try { 
             if (connected)
             {
                 UnityEngine.Debug.LogError("连接已存在");
                 return true;
             }
-            //token 令牌
-            var token = "";
-            try
+            if (roomID != lastroomid || ChatHostList.Count == 0)
             {
-                //发起Http请求
-                var req = await httpClient.GetStringAsync(CIDInfoUrl + roomID);
-                JObject roomobj = JObject.Parse(req);
-                token = roomobj["data"]["token"].ToString();
-                chatPath = roomobj["data"]["host"].ToString();
-                chatPort = roomobj["data"]["port"].Value<int>();
-                if (string.IsNullOrEmpty(chatPath)) throw new Exception();
+                //token 令牌
+                try
+                {
+                    //发起Http请求
+                    var req = await httpClient.GetStringAsync(CIDInfoUrl + roomID);
+                    JObject roomobj = JObject.Parse(req);
+                    token = roomobj["data"]["token"] + "";
+                    var serverlist = roomobj["data"]["host_list"].Value<JArray>();
+                    ChatHostList = new List<Tuple<string, int>>();
+                    foreach (var serverinfo in serverlist)
+                    {
+                        ChatHostList.Add(new Tuple<string, int>(serverinfo["host"] + "", serverinfo["port"].Value<int>()));
+                    }
+
+                    var server = ChatHostList[new Random().Next(ChatHostList.Count)];
+                    chatHost = server.Item1;
+
+                    chatPort = server.Item2;
+                    if (string.IsNullOrEmpty(chatHost)) throw new Exception();
+                }
+                catch (WebException ex)
+                {
+                    chatHost = defaultHosts[UnityEngine.Random.Range(0, defaultHosts.Length)];
+                    chatPort = defaultPort;
+                    var errorResponse = ex.Response as HttpWebResponse;
+                    if (errorResponse.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        // 直播间不存在（HTTP 404）
+                        var msg = "该直播间疑似不存在，弹幕姬只支持使用原房间号连接";
+                        UnityEngine.Debug.LogError(msg);
+                    }
+                    else
+                    {
+                        // B站服务器响应错误
+                        var msg = "B站服务器响应弹幕服务器地址出错，尝试使用常见地址连接";
+                        UnityEngine.Debug.LogError(msg);
+                    }
+                    // UnityEngine.Debug.LogError($"获取弹幕服务器地址时出现错误，尝试使用默认服务器... 错误信息: {e}");
+                }
+                catch (Exception)
+                {
+                    // 其他错误（XML解析错误？）
+                    chatHost = defaultHosts[new Random().Next(defaultHosts.Length)];
+                    chatPort = defaultPort;
+                    var msg = "获取弹幕服务器地址时出现未知错误，尝试使用常见地址连接";
+                    UnityEngine.Debug.LogError(msg);
+                }
             }
-            catch (Exception e)
+            else
             {
-                chatPath = defaultPaths[UnityEngine.Random.Range(0, defaultPaths.Length)];
-                UnityEngine.Debug.LogError($"获取弹幕服务器地址时出现错误，尝试使用默认服务器... 错误信息: {e}");
+                var server = ChatHostList[new Random().Next(ChatHostList.Count)];
+                chatHost = server.Item1;
+
+                chatPort = server.Item2;
             }
             // 创建 TCP对象
             client = new TcpClient();
             // DNS解析域名 服务器IP地址
-            var ipAddress = await System.Net.Dns.GetHostAddressesAsync(chatPath);
+            var ipAddress = await System.Net.Dns.GetHostAddressesAsync(chatHost);
             // 随机选择一个进行连接
             await client.ConnectAsync(ipAddress[UnityEngine.Random.Range(0, ipAddress.Length)], chatPort);
             netStream = Stream.Synchronized(client.GetStream());
-
+            cancellationTokenSource = new CancellationTokenSource();
             UnityEngine.Debug.Log("发送验证消息");
-            if (await SendJoinChannel(roomID, token))
+            if (await SendJoinChannel(roomID, token, cancellationTokenSource.Token))
             {
                 UnityEngine.Debug.Log("成功");
                 connected = true;
                 // 发送心跳包
-                _ = HeartbeatLoop();
+                _ = ReceiveMessageLoop(cancellationTokenSource.Token);
+                lastserver = chatHost;
+                lastroomid = roomID;
                 // 接收消息
-                _ = ReceiveMessageLoop();
+
                 return true;
             }
             UnityEngine.Debug.Log("失败");
             return false;
         }
-        
-        public void DisConnect() => _disconnect();
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError(ex);
+                return false;
+            }
+        }
+    public void DisConnect() => _disconnect();
 
-        async Task ReceiveMessageLoop()
+        async Task ReceiveMessageLoop(CancellationToken ct)
         {
+            Task heartbeatLoop = null;
             var stableBuffer = new byte[16];
             var buffer = new byte[4096];
             while (this.connected)
             {
                 try
                 {
-                    await netStream.ReadAsync(stableBuffer, 0, 16);
+                    await netStream.ReadBAsync(stableBuffer, 0, 16,ct);
                     var protocol = DanmakuProtocol.FromBuffer(stableBuffer);
                     if (protocol.PacketLength < 16)
                     {
@@ -130,7 +192,11 @@ namespace Liluo.BiliBiliLive
                     if (payloadlength == 0) continue;
                     buffer = new byte[payloadlength];
                     //继续接受 协议总长度-协议头部 长度 的字节数据
-                    await netStream.ReadAsync(buffer, 0, payloadlength);
+                    await netStream.ReadBAsync(buffer, 0, payloadlength,ct);
+                    if (heartbeatLoop == null)
+                    {
+                        heartbeatLoop = this.HeartbeatLoop(cancellationTokenSource.Token);
+                    }
                     if (protocol.Version == 2 && protocol.Action == 5)
                     {
                         using (var ms = new MemoryStream(buffer, 2, payloadlength - 2))
@@ -141,19 +207,11 @@ namespace Liluo.BiliBiliLive
                             {
                                 while (true)
                                 {
-                                    await deflate.ReadAsync(headerbuffer, 0, 16);
+                                    await deflate.ReadBAsync(headerbuffer, 0, 16,ct);
                                     var protocol_in = DanmakuProtocol.FromBuffer(headerbuffer);
                                     payloadlength = protocol_in.PacketLength - 16;
-                                    if (payloadlength <= 0) break;
                                     var danmakubuffer = new byte[payloadlength];
-                                    await deflate.ReadAsync(danmakubuffer, 0, payloadlength);
-                                    int num = 0;
-                                    for (int i = 0; i < danmakubuffer.Length; i++)
-                                    {
-                                        if (danmakubuffer[i] == 0)
-                                            num++;
-                                    }
-                                    if (num == danmakubuffer.Length) break;
+                                    await deflate.ReadBAsync(danmakubuffer, 0, payloadlength,ct);
                                     ProcessDanmaku(protocol.Action, danmakubuffer);
                                 }
                             }
@@ -161,6 +219,34 @@ namespace Liluo.BiliBiliLive
                             {
                                 UnityEngine.Debug.LogError($"读取弹幕消息失败。错误信息: {e}");
                             }
+                        }
+                    }
+                    else if (protocol.Version == 3 && protocol.Action == 5) // brotli?
+                    {
+                        using (var ms = new MemoryStream(buffer)) // Skip 0x78 0xDA
+
+                        using (var deflate = new Brotli.BrotliStream(ms, CompressionMode.Decompress))
+                        {
+                            var headerbuffer = new byte[16];
+                            try
+                            {
+                                while (true)
+                                {
+                                    await deflate.ReadBAsync(headerbuffer, 0, 16,ct);
+                                    var protocol_in = DanmakuProtocol.FromBuffer(headerbuffer);
+                                    payloadlength = protocol_in.PacketLength - 16;
+                                    var danmakubuffer = new byte[payloadlength];
+                                    await deflate.ReadBAsync(danmakubuffer, 0, payloadlength,ct);
+                                    ProcessDanmaku(protocol.Action, danmakubuffer);
+                                }
+
+                            }
+                            catch (Exception e)
+                            {
+                                UnityEngine.Debug.LogError($"读取弹幕消息失败。错误信息: {e}");
+                            }
+
+
                         }
                     }
                     else
@@ -179,6 +265,7 @@ namespace Liluo.BiliBiliLive
                     {
                         UnityEngine.Debug.LogError($"接受消息时发生错误。错误信息: {e}");
                     }
+                    _disconnect();
                 }
             }
         }
@@ -187,11 +274,11 @@ namespace Liluo.BiliBiliLive
         {
             switch (action)
             {
-                case 3: 
+                case 3:
                     {
                         // 观众人数
-                        var viewer = EndianBitConverter.BigEndian.ToInt32(buffer, 0); 
-                        OnRoomViewer?.Invoke(viewer);
+                        var viewer = EndianBitConverter.BigEndian.ToInt32(buffer, 0);
+                        OnUserCountChange?.Invoke(viewer);
                         break;
                     }
                 case 5:
@@ -209,12 +296,75 @@ namespace Liluo.BiliBiliLive
                         var obj = JObject.Parse(json);
                         switch (obj["cmd"].ToString())
                         {
+                            case "WARNING":
+                                {
+                                    var commentText = obj["msg"]?.ToString();
+                                    OnWarning?.Invoke(commentText);
+                                    break;
+                                }
+                            case "LIVE":
+                                OnLiveStateChange?.Invoke(1);
+                                break;
+                            case "PREPARING":
+                                OnLiveStateChange?.Invoke(0);
+                                break;
+                            case "CUT_OFF":
+                                {
+                                    OnLiveStateChange?.Invoke(-1);
+                                    break;
+                                }
+                            case "GIFT_TOP":
+                                {
+                                    //MsgType = MsgTypeEnum.GiftTop;
+                                    //var alltop = obj["data"].ToList();
+                                    //GiftRanking = new List<GiftRank>();
+                                    //foreach (var v in alltop)
+                                    //{
+                                    //    GiftRanking.Add(new GiftRank()
+                                    //    {
+                                    //        uid = v.Value<int>("uid"),
+                                    //        UserName = v.Value<string>("uname"),
+                                    //        coin = v.Value<decimal>("coin")
+
+                                    //    });
+                                    //}
+
+                                    break;
+                                }
+                            case "ENTRY_EFFECT":
+                                {
+                                    //var msg = obj["data"]["copy_writing"] + "";
+                                    //var match = EntryEffRegex.Match(msg);
+                                    //if (match.Success)
+                                    //{
+                                    //    MsgType = MsgTypeEnum.WelcomeGuard;
+                                    //    UserName = match.Groups[1].Value;
+                                    //    UserID = obj["data"]["uid"].ToObject<int>();
+                                    //    UserGuardLevel = obj["data"]["privilege_type"].ToObject<int>();
+                                    //}
+                                    //else
+                                    //{
+                                    //    MsgType = MsgTypeEnum.Unknown;
+                                    //}
+
+                                    break;
+                                }
+                            case "INTERACT_WORD":
+                                {
+                                    BiliBiliLiveInteractData interactData = new BiliBiliLiveInteractData();
+                                    interactData.username = obj["data"]["uname"].ToString();
+                                    interactData.userId = obj["data"]["uid"].ToObject<int>();
+                                    interactData.interactType = (InteractTypeEnum)obj["data"]["msg_type"].ToObject<int>();
+                                    OnInteractCallBack?.Invoke(interactData);
+                                    break;
+                                }
                             case "DANMU_MSG":
                                 {
                                     BiliBiliLiveDanmuData danmuData = new BiliBiliLiveDanmuData();
                                     danmuData.username = obj["info"][2][1].ToString();
                                     danmuData.content = obj["info"][1].ToString();
                                     danmuData.userId = obj["info"][2][0].Value<int>();
+                                    danmuData.isAdmin = obj["info"][2][2].ToString() == "1";
                                     danmuData.vip = obj["info"][2][3].ToString() == "1";
                                     danmuData.guardLevel = obj["info"][7].ToObject<int>();
                                     OnDanmuCallBack?.Invoke(danmuData);
@@ -230,8 +380,8 @@ namespace Liluo.BiliBiliLive
                                     giftData.giftName = obj["data"]["giftName"].ToString();
                                     giftData.giftId = obj["data"]["giftId"].Value<int>();
                                     giftData.num = obj["data"]["num"].Value<int>();
-                                    giftData.price = obj["data"]["price"].Value<int>();
-                                    giftData.total_coin = obj["data"]["total_coin"].Value<int>();
+                                    giftData.price = obj["data"]["price"].Value<int>();//TODO
+                                    giftData.total_coin = obj["data"]["total_coin"].Value<int>();//TODO
                                     OnGiftCallBack?.Invoke(giftData);
                                     break;
                                 }
@@ -251,6 +401,7 @@ namespace Liluo.BiliBiliLive
                                 }
                             // SC
                             case "SUPER_CHAT_MESSAGE":
+                            case "SUPER_CHAT_MESSAGE_JP":
                                 {
                                     BiliBiliLiveSuperChatData superChatData = new BiliBiliLiveSuperChatData();
                                     superChatData.username = obj["data"]["user_info"]["uname"].ToString();
@@ -261,11 +412,39 @@ namespace Liluo.BiliBiliLive
                                     OnSuperChatCallBack?.Invoke(superChatData);
                                     break;
                                 }
+                            case "WELCOME":
+                                {
+                                    BiliBiliLiveWelcomeData welcomeData = new BiliBiliLiveWelcomeData();
+                                    welcomeData.username = obj["data"]["uname"].ToString();
+                                    welcomeData.userId = obj["data"]["uid"].ToObject<int>();
+                                    welcomeData.isVIP = true;
+                                    welcomeData.isAdmin = obj["data"]["isadmin"]?.ToString() == "1";
+                                    welcomeData.guardLevel = 0;
+                                    OnWelcomeCallBack?.Invoke(welcomeData);
+                                    break;
+                                }
+                            case "WELCOME_GUARD":
+                                {
+                                    BiliBiliLiveWelcomeData welcomeData = new BiliBiliLiveWelcomeData();
+                                    welcomeData.username = obj["data"]["username"].ToString();
+                                    welcomeData.userId = obj["data"]["uid"].ToObject<int>();
+                                    welcomeData.guardLevel = obj["data"]["guard_level"].ToObject<int>();
+                                    OnWelcomeCallBack?.Invoke(welcomeData);
+                                    break;
+                                }
+                            case "WATCHED_CHANGE":
+                                {
+
+                                    var count = obj["data"]["num"].ToObject<int>();
+                                    OnWatchCountChange?.Invoke(count);
+                                    break;
+                                }
                             default:
                                 if (obj["cmd"].ToString().StartsWith("DANMU_MSG"))
                                 {
                                     BiliBiliLiveDanmuData danmuData = new BiliBiliLiveDanmuData();
                                     danmuData.username = obj["info"][2][1].ToString();
+                                    danmuData.isAdmin = obj["info"][2][2].ToString() == "1";
                                     danmuData.content = obj["info"][1].ToString();
                                     danmuData.userId = obj["info"][2][0].Value<int>();
                                     danmuData.vip = obj["info"][2][3].ToString() == "1";
@@ -284,15 +463,15 @@ namespace Liluo.BiliBiliLive
             }
         }
 
-        async Task HeartbeatLoop()
+        async Task HeartbeatLoop(CancellationToken cancellationToken)
         {
             try
             {
                 while (this.connected)
                 {
                     //每30秒发送一次 心跳
-                    await SendHeartbeatAsync();
-                    await Task.Delay(30000);
+                    await SendHeartbeatAsync(cancellationToken);
+                    await Task.Delay(30000,cancellationToken);
                 }
             }
             catch (Exception e)
@@ -301,31 +480,30 @@ namespace Liluo.BiliBiliLive
                 _disconnect();
             }
 
-            // 发送ping包
-            async Task SendHeartbeatAsync() => await SendSocketDataAsync(2);
+           
         }
-
+        private async Task SendHeartbeatAsync(CancellationToken ct)
+        {
+            await SendSocketDataAsync(2, "[object Object]", ct);
+            UnityEngine.Debug.Log("Message Sent: Heartbeat");
+        }
         void _disconnect()
         {
-            connected = false;
-            try
+            if (connected)
             {
-                client.Close();
-                netStream.Close();
                 UnityEngine.Debug.Log("断开连接");
+                cancellationTokenSource.Cancel();
+                connected = false;
+                client.Close();
+                netStream = null;
             }
-            catch (Exception e)
-            {
-                UnityEngine.Debug.LogError($"断开连接时发生错误。错误信息: {e}");
-            }
-            netStream = null;
         }
 
-        Task SendSocketDataAsync(int action, string body = "")
+        Task SendSocketDataAsync(int action, string body, CancellationToken ct)
         {
-            return SendSocketDataAsync(0, 16, protocolversion, action, 1, body);
+            return SendSocketDataAsync(0, 16, protocolversion, action, 1, body,ct);
         }
-        async Task SendSocketDataAsync(int packetlength, short magic, short ver, int action, int param = 1, string body = "")
+        async Task SendSocketDataAsync(int packetlength, short magic, short ver, int action, int param, string body, CancellationToken ct)
         {
             var playload = Encoding.UTF8.GetBytes(body);
             if (packetlength == 0) packetlength = playload.Length + 16;
@@ -351,11 +529,11 @@ namespace Liluo.BiliBiliLive
             }
         }
 
-        async Task<bool> SendJoinChannel(int channelId, string token)
+        async Task<bool> SendJoinChannel(int channelId, string token, CancellationToken ct)
         {
-            var packetModel = new { roomid = channelId, uid = 0, protover = 2, token = token, platform = "danmuji" };
+            var packetModel = new { roomid = channelId, uid = 0, protover = 3, key = token, platform = "danmuji", type = 2 };
             var playload = JsonConvert.SerializeObject(packetModel);
-            await SendSocketDataAsync(7, playload);
+            await SendSocketDataAsync(7, playload,ct);
             return true;
         }
     }

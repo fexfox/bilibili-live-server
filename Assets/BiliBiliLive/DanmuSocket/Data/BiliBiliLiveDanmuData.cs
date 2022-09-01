@@ -26,5 +26,9 @@ namespace Liluo.BiliBiliLive
         /// 舰队等级（舰长:3 提督:2 总督:1）
         /// </summary>
         public int guardLevel;
+        /// <summary>
+        /// 房管
+        /// </summary>
+        public bool isAdmin;
     }
 }
