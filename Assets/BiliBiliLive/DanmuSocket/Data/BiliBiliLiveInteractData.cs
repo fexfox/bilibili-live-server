@@ -14,7 +14,7 @@ public struct BiliBiliLiveInteractData
     ///  观众互动内容
     /// </summary>
     public InteractTypeEnum interactType;
-
+    public int guardLevel;
 }
 /// <summary>
 /// 观众互动内容

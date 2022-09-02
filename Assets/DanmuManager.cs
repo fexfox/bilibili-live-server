@@ -13,6 +13,7 @@ public class DanmuManager : MonoBehaviour
     public RectTransform T_content;
     public TMP_Text username;
     public TMP_Text content;
+    public TMP_Text level;
     public Image Guard;
     [InspectorShow("×Ü¶½")]
     public Color G1;
@@ -32,11 +33,10 @@ public class DanmuManager : MonoBehaviour
     {
         _spManager = FindObjectOfType<SpManager>();
         self_rt = GetComponent<RectTransform>();
-        p_parent = _spManager.GetPoolItemParentTransform("Danmu");
     }
     void Start()
     {
-       
+        p_parent = _spManager.GetPoolItemParentTransform("Danmu");
     }
     public void HideAvatar()
     {
@@ -64,7 +64,8 @@ public class DanmuManager : MonoBehaviour
     }
     // Update is called once per frame
     void Update()
-    {if(gameObject.activeSelf)
+    {
+        if(gameObject.activeSelf)
         if (self_rt.anchoredPosition.y >= -200f&&transform.parent?.name!="Danmu") {
             gameObject.transform.SetParent(p_parent);
             _spManager.DisablePoolObject(gameObject);

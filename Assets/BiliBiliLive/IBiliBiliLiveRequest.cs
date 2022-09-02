@@ -1,10 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace Liluo.BiliBiliLive
 {
     public interface IBiliBiliLiveRequest
-    {
+    { 
         /// <summary>
         /// 申请异步连接
         /// </summary>

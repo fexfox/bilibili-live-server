@@ -7,14 +7,13 @@ using UnityEngine;
 
 public class MainControl : MonoBehaviour
 {
-    public GameObject DanmuPrefab;
-    public Transform Container;
+    public Transform DanmuContainer;
+    public Transform SCContainer;
     public TMP_Text RoomViewer;
     public TMP_Text WatchCount;
     public TMP_Text RoomState;
     public TMP_Text Gift;
     public TMP_Text Interact;
-    public TMP_Text SC;
     public TMP_InputField RoomID;
     public bool showAvatar;
     private IPoolActions _spManager;
@@ -51,7 +50,13 @@ public class MainControl : MonoBehaviour
 
     private void Req_OnSuperChatCallBack(BiliBiliLiveSuperChatData obj)
     {
-        SC.text+= $"{Environment.NewLine}<color=#FF425E>￥{obj.price}</color> <color=#FF425E>{obj.keepTime}s</color> <color=#FFB3B3>{obj.username}</color>{Environment.NewLine}{obj.content}";
+        Debug.Log("sc");
+        var sc = _spManager.GetRandomPoolItem("SC", false);
+        if (!sc) return;
+        sc.transform.SetParent(SCContainer);
+        var data = sc.GetComponent<SCManager>();
+        data.setSC(obj.username, obj.price.ToString(), obj.keepTime, obj.content);
+        sc.SetActive(true);
     }
 
     private void Req_OnGuardCallBack(BiliBiliLiveGuardData obj)
@@ -71,7 +76,7 @@ public class MainControl : MonoBehaviour
 
                 break;
         }
-       
+
 
     }
 
@@ -85,7 +90,9 @@ public class MainControl : MonoBehaviour
         switch (obj.interactType)
         {
             case InteractTypeEnum.Enter:
-                Interact.text += $"{Environment.NewLine}欢迎<color=#FFB3B3>{obj.username}</color>进入直播间";
+                var guardName = obj.guardLevel == 3 ? " <color=#61B1FF>舰长</color>" : obj.guardLevel == 2 ? " <color=#D397E9>提督</color>" : obj.guardLevel == 1 ? " <color=#FF425E>总督</color>" : "";
+                Interact.text += $"{Environment.NewLine}欢迎{guardName} <color=#FFB3B3>{obj.username}</color>进入直播间";
+                Debug.Log("enter");
                 break;
             case InteractTypeEnum.Follow:
                 Interact.text += $"{Environment.NewLine}感谢<color=#FFB3B3>{obj.username}</color>的关注";
@@ -138,14 +145,15 @@ public class MainControl : MonoBehaviour
 
         var danmu = _spManager.GetRandomPoolItem("Danmu", false);
         if (!danmu) return;
-        danmu.transform.SetParent(Container);
+        danmu.transform.SetParent(DanmuContainer);
         var data = danmu.GetComponent<DanmuManager>();
         if (showAvatar)
-        { data.avatar.sprite = await BiliBiliLive.GetHeadSprite(obj.userId); }
+            data.avatar.sprite = await BiliBiliLive.GetHeadSprite(obj.userId);
         else
-        {
             data.HideAvatar();
-        }
+        var level = obj.medalLevel;
+        if (level > 0)
+            data.level.text = level.ToString();
         data.username.text = obj.username;
         data.content.text = obj.content;
         data.setGuardLevel(obj.guardLevel);

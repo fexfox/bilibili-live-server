@@ -30,5 +30,6 @@ namespace Liluo.BiliBiliLive
         /// 房管
         /// </summary>
         public bool isAdmin;
+        public int medalLevel;
     }
 }
